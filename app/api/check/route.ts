@@ -21,12 +21,19 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     });
 
     if (!response.ok) {
-      return NextResponse.json({
-        found: false,
-        levelId,
-        error: "Level not found",
-      });
-    }
+  const body = await response.text();
+
+  console.error("GDBrowser error:", {
+    status: response.status,
+    body: body.slice(0, 500),
+  });
+
+  return NextResponse.json({
+    found: false,
+    levelId,
+    error: `GDBrowser HTTP ${response.status}`,
+  }, { status: 502 });
+}
 
     const data = await response.json();
 
