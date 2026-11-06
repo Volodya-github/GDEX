@@ -19,6 +19,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     const response = await fetch(`https://gdbrowser.com/api/level/${levelId}`, {
       method: "GET",
       headers: { Accept: "application/json" },
+      cache: "no-store",
       signal: AbortSignal.timeout(10_000),
     });
 
