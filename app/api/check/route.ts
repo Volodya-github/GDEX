@@ -5,9 +5,10 @@ import { checkRateLimit, rateLimitResponse } from "@/lib/rateLimit";
 
 const MAX_LEVEL_ID_LENGTH = 12;
 
+import { headers } from "next/headers";
+
 export async function GET(request: NextRequest): Promise<NextResponse> {
-  const limit = checkRateLimit(request, "check", { windowMs: 60_000, max: 30 });
-  if (!limit.ok) return rateLimitResponse(limit);
+  await headers(); // Forces dynamic runtime execution
 
   const levelId = request.nextUrl.searchParams.get("id");
 
