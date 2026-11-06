@@ -1,6 +1,3 @@
-export const dynamic = 'force-dynamic';
-
-import { headers } from "next/headers";
 import { NextRequest, NextResponse } from "next/server";
 import { GD_SERVERS, GD_CLIENT_SECRET, OBJ_KEYS, HEADER_KEYS } from "@/lib/constants";
 import { checkRateLimit, rateLimitResponse } from "@/lib/rateLimit";
@@ -211,8 +208,8 @@ function parseBody(body: unknown): DownloadBody | null {
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
-  await headers(); // Breaks the build cache barrier
   const limit = checkRateLimit(request, "download", { windowMs: 60_000, max: 10 });
+  if (!limit.ok) return rateLimitResponse(limit);
 
   let body: unknown;
   try {
