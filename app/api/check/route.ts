@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { checkRateLimit, rateLimitResponse } from "@/lib/rateLimit";
 
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
 const MAX_LEVEL_ID_LENGTH = 12;
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
@@ -8,7 +11,6 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   if (!limit.ok) return rateLimitResponse(limit);
 
   const levelId = request.nextUrl.searchParams.get("id");
-
   if (!levelId || !/^\d+$/.test(levelId) || levelId.length > MAX_LEVEL_ID_LENGTH) {
     return NextResponse.json({ error: "Invalid level ID" }, { status: 400 });
   }
@@ -18,31 +20,50 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       method: "GET",
       headers: { Accept: "application/json" },
       signal: AbortSignal.timeout(10_000),
+      cache: "no-store",
     });
 
+    if (response.status === 404) {
+      return NextResponse.json({ found: false, levelId, error: "Level not found" });
+    }
+
     if (!response.ok) {
-  const body = await response.text();
-
-  console.error("GDBrowser error:", {
-    status: response.status,
-    body: body.slice(0, 500),
-  });
-
-  return NextResponse.json({
-    found: false,
-    levelId,
-    error: `GDBrowser HTTP ${response.status}`,
-  }, { status: 502 });
-}
-
-    const data = await response.json();
-
-    if (data.error || data === -1) {
-      return NextResponse.json({
-        found: false,
+      console.error("GDEX metadata upstream HTTP error", {
+        upstream: "GDBrowser",
+        status: response.status,
         levelId,
-        error: "Level not found",
       });
+      return NextResponse.json(
+        {
+          found: false,
+          levelId,
+          error: response.status === 403
+            ? "GDBrowser denied access (HTTP 403). The level may still exist."
+            : `GDBrowser is unavailable (HTTP ${response.status}).`,
+        },
+        { status: 502 },
+      );
+    }
+
+    let data: any;
+    try {
+      data = await response.json();
+    } catch {
+      console.error("GDEX metadata upstream returned invalid JSON", { levelId });
+      return NextResponse.json(
+        { found: false, levelId, error: "GDBrowser returned invalid JSON." },
+        { status: 502 },
+      );
+    }
+
+    if (data === -1 || data?.error) {
+      return NextResponse.json({ found: false, levelId, error: "Level not found" });
+    }
+    if (!data || typeof data !== "object" || Array.isArray(data)) {
+      return NextResponse.json(
+        { found: false, levelId, error: "GDBrowser returned an unexpected response." },
+        { status: 502 },
+      );
     }
 
     return NextResponse.json({
@@ -63,8 +84,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         songID: data.songID,
         customSongID: data.customSong,
         songLink: data.songLink,
-        officialSong:
-          typeof data.officialSong === "number" ? data.officialSong : undefined,
+        officialSong: typeof data.officialSong === "number" ? data.officialSong : undefined,
         coins: data.coins ?? data.userCoins ?? 0,
         verifiedCoins: data.verifiedCoins ?? false,
         featured: data.featured ?? false,
@@ -79,11 +99,14 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         ldm: data.ldm,
       },
     });
-  } catch {
-    return NextResponse.json({
-      found: false,
+  } catch (error) {
+    console.error("GDEX metadata fetch failed", {
       levelId,
-      error: "Failed to check level",
+      reason: error instanceof Error ? error.message : String(error),
     });
+    return NextResponse.json(
+      { found: false, levelId, error: "Unable to reach GDBrowser. Try again later." },
+      { status: 502 },
+    );
   }
 }
