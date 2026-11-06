@@ -1,14 +1,11 @@
-export const dynamic = 'force-dynamic';
-
 import { NextRequest, NextResponse } from "next/server";
 import { checkRateLimit, rateLimitResponse } from "@/lib/rateLimit";
 
 const MAX_LEVEL_ID_LENGTH = 12;
 
-import { headers } from "next/headers";
-
 export async function GET(request: NextRequest): Promise<NextResponse> {
-  await headers(); // Forces dynamic runtime execution
+  const limit = checkRateLimit(request, "check", { windowMs: 60_000, max: 30 });
+  if (!limit.ok) return rateLimitResponse(limit);
 
   const levelId = request.nextUrl.searchParams.get("id");
 
@@ -20,7 +17,6 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     const response = await fetch(`https://gdbrowser.com/api/level/${levelId}`, {
       method: "GET",
       headers: { Accept: "application/json" },
-      cache: "no-store",
       signal: AbortSignal.timeout(10_000),
     });
 
