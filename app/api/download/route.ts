@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic';
+
 import { NextRequest, NextResponse } from "next/server";
 import { GD_SERVERS, GD_CLIENT_SECRET, OBJ_KEYS, HEADER_KEYS } from "@/lib/constants";
 import { checkRateLimit, rateLimitResponse } from "@/lib/rateLimit";
