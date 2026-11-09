@@ -1,103 +1,96 @@
-    if (Buffer.byteLength(decodedData, "utf8") > MAX_DECODED_BYTES ||
-        !decodedData.includes(",") || !decodedData.includes(";")) {
-      return NextResponse.json(
-        { error: "Imported data is not a valid GD editor string" },
-        { status: 400 }
-      );
-    }
-  } else {
+import { NextRequest, NextResponse } from "next/server";
+import { GD_SERVERS, GD_CLIENT_SECRET, OBJ_KEYS, HEADER_KEYS } from "@/lib/constants";
+import { checkRateLimit, rateLimitResponse } from "@/lib/rateLimit";
+import zlib from "zlib";
+
+const MAX_LEVEL_ID_LENGTH = 12;
+const MAX_RAW_BYTES = 10 * 1024 * 1024;
+const MAX_DECODED_BYTES = 64 * 1024 * 1024;
+
+function decodeLevelData(raw: string): string {
+  let s = raw.replace(/-/g, "+").replace(/_/g, "/").replace(/\s/g, "");
+  s += "=".repeat((4 - (s.length % 4)) % 4);
+
+  const buffer = Buffer.from(s, "base64");
+  if (buffer.length > MAX_RAW_BYTES) {
+    throw new Error("Level data exceeds size limit");
+  }
+
+  for (const windowBits of [47, 15, -15, 31]) {
     try {
-      const metaResponse = await fetch(
-        `https://gdbrowser.com/api/level/${levelId}`,
-        { signal: AbortSignal.timeout(10_000) }
-      );
-      if (metaResponse.ok) {
-        const data = await metaResponse.json();
-        if (data && !data.error) levelInfo = data;
-      }
+      const decompressed = zlib.inflateSync(buffer, {
+        windowBits,
+        maxOutputLength: MAX_DECODED_BYTES,
+      });
+      return decompressed.toString("utf-8");
     } catch {
-      // Metadata is optional; downloads can succeed without it.
-    }
-
-    const downloadServers = GD_SERVERS.filter((s) => s.type !== "api");
-    const orderedServers = serverId
-      ? [
-          ...downloadServers.filter((s) => s.id === serverId),
-          ...downloadServers.filter((s) => s.id !== serverId),
-        ]
-      : downloadServers;
-
-    if (orderedServers.length === 0) {
-      return NextResponse.json({ error: "No download server configured" }, { status: 503 });
-    }
-
-    for (const srv of orderedServers) {
-      const text = await tryServer(srv, levelId);
-      if (text) {
-        rawResponse = text;
-        usedServer = srv.name;
-        break;
-      }
-    }
-
-    if (!rawResponse) {
-      return NextResponse.json(
-        { error: "No upstream server returned level data. This does not mean the level is missing." },
-        { status: 502 }
-      );
-    }
-
-    parts = rawResponse.split("#");
-    kv = parseKV(parts[0]);
-    const levelString = kv["4"];
-    if (!levelString || kv["1"] !== levelId) {
-      return NextResponse.json({ error: "Invalid level response from upstream" }, { status: 502 });
-    }
-    try {
-      decodedData = decodeLevelData(levelString);
-    } catch {
-      return NextResponse.json({ error: "Invalid or oversized upstream level data" }, { status: 502 });
+      continue;
     }
   }
 
-  const objectsParsed = parseObjects(decodedData);
-  const stats = computeStats(objectsParsed.objects);
-
-  let songInfo = null;
-  for (const part of parts) {
-    if (part.includes("~|~")) {
-      songInfo = parseSongKV(part);
-      break;
-    }
-  }
-
-  return NextResponse.json({
-    success: true,
-    levelId,
-    server: usedServer,
-    info: levelInfo || {
-      id: levelId,
-      name: kv["2"] || `Level_${levelId}`,
-      author: "Unknown",
-    },
-    levelData: decodedData,
-    parsed: {
-      header: objectsParsed.header,
-      object_count: objectsParsed.object_count,
-      objects_preview: objectsParsed.objects.slice(0, 100),
-    },
-    stats,
-    songInfo: songInfo
-      ? {
-          id: songInfo["1"],
-          name: songInfo["2"],
-          artistID: songInfo["3"],
-          artistName: songInfo["4"],
-          size: songInfo["5"],
-          url: songInfo["10"] ? decodeURIComponent(songInfo["10"]) : null,
-        }
-      : null,
-    rawSize: isImport ? Buffer.byteLength(levelData!, "utf8") : rawResponse.length,
-    decodedSize: decodedData.length,
-  });
+  return buffer.toString("utf-8");
 }
+
+function parseKV(raw: string, separator: string = ":"): Record<string, string> {
+  const parts = raw.split(separator);
+  const result: Record<string, string> = {};
+  for (let i = 0; i < parts.length - 1; i += 2) {
+    result[parts[i]] = parts[i + 1];
+  }
+  return result;
+}
+
+function parseSongKV(raw: string): Record<string, string> {
+  const parts = raw.split("~|~");
+  const result: Record<string, string> = {};
+  for (let i = 0; i < parts.length - 1; i += 2) {
+    result[parts[i]] = parts[i + 1];
+  }
+  return result;
+}
+
+function parseObjects(levelData: string): {
+  header: Record<string, string>;
+  objects: Record<string, string | number>[];
+  object_count: number;
+} {
+  const parts = levelData.split(";");
+
+  const header: Record<string, string> = {};
+  if (parts.length > 0) {
+    const hp = parts[0].split(",");
+    for (let i = 0; i < hp.length - 1; i += 2) {
+      const key = HEADER_KEYS[hp[i]] || hp[i];
+      header[key] = hp[i + 1];
+    }
+  }
+
+  const objects: Record<string, string | number>[] = [];
+  for (let i = 1; i < parts.length; i++) {
+    const objStr = parts[i].trim();
+    if (!objStr) continue;
+
+    const op = objStr.split(",");
+    const obj: Record<string, string | number> = {};
+
+    for (let j = 0; j < op.length - 1; j += 2) {
+      const key = OBJ_KEYS[op[j]] || `p${op[j]}`;
+      let val: string | number = op[j + 1];
+
+      if (val.includes(".")) {
+        const floatVal = parseFloat(val);
+        if (!isNaN(floatVal)) val = floatVal;
+      } else {
+        const intVal = parseInt(val, 10);
+        if (!isNaN(intVal)) val = intVal;
+      }
+
+      obj[key] = val;
+    }
+
+    if (Object.keys(obj).length > 0) {
+      objects.push(obj);
+    }
+  }
+
+  objects.sort((a, b) => {
