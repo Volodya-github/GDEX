@@ -93,6 +93,11 @@ export default function Home(): React.ReactElement {
   const [downloadedFiles, setDownloadedFiles] = useState<DownloadedFile[]>([]);
   const [selectedServer, setSelectedServer] = useState<string>("boomlings");
   const [exportFormats, setExportFormats] = useState<ExportFormat[]>(["gmd", "json"]);
+  const [importData, setImportData] = useState("");
+  const [importing, setImporting] = useState(false);
+  const [importedFiles, setImportedFiles] = useState<DownloadedFile[]>([]);
+  const [importError, setImportError] = useState("");
+  const [importSuccess, setImportSuccess] = useState("");
 
   const queue = useDownloadQueue(selectedServer);
 
@@ -167,6 +172,75 @@ export default function Home(): React.ReactElement {
       setLoading(false);
     }
   }, [levelId, selectedServer, exportFormats, levelInfo, flagError]);
+
+  
+const importLevel = useCallback(async (): Promise<void> => {
+  if (!importData.trim()) {
+    setImportError("Paste GD editor data first.");
+    return;
+  }
+
+  if (exportFormats.length === 0) {
+    setImportError("Select at least one export format.");
+    return;
+  }
+
+  setImporting(true);
+  setImportError("");
+  setImportSuccess("");
+  setImportedFiles([]);
+
+  try {
+    const importId = /^\d{1,12}$/.test(levelId.trim())
+      ? levelId.trim()
+      : "0";
+
+    const response = await fetch("/api/download", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        levelId: importId,
+        levelData: importData.trim(),
+      }),
+    });
+
+    const data: DownloadResponse & { error?: string } =
+      await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.error || "Import failed");
+    }
+
+    const safeName = makeSafeName(
+      data.info?.name,
+      importId
+    );
+
+    const files: DownloadedFile[] = [];
+
+    for (const format of exportFormats) {
+      const file = await generateFile(format, data, safeName);
+      if (file) files.push(file);
+    }
+
+    if (files.length === 0) {
+      throw new Error("No files could be generated.");
+    }
+
+    setImportedFiles(files);
+    setImportSuccess(
+      `Imported ${data.parsed.object_count} objects successfully!`
+    );
+  } catch (err) {
+    setImportError(
+      err instanceof Error ? err.message : "Import failed"
+    );
+  } finally {
+    setImporting(false);
+  }
+}, [importData, levelId, exportFormats]);
 
   const toggleFormat = useCallback((format: ExportFormat): void => {
     setExportFormats((prev) =>
@@ -295,8 +369,76 @@ export default function Home(): React.ReactElement {
                           </div>
                         </div>
                       </CardContent>
-                    </Card>
+                    </Card>           
+<Card className="animate-fadeInUp">
+  <CardHeader icon={<FileIcon className="w-5 h-5" />}>
+    <CardTitle>Import Level</CardTitle>
+  </CardHeader>
 
+  <CardContent>
+    <p className="text-sm text-[var(--text-muted)] mb-3">
+      Paste Geometry Dash editor data to export it
+      without contacting online GD servers.
+    </p>
+
+    <textarea
+      value={importData}
+      onChange={(e) => {
+        setImportData(e.target.value);
+        setImportedFiles([]);
+        setImportSuccess("");
+        setImportError("");
+      }}
+      placeholder="kA2,0,kA3,0;1,1,2,150,3,150;"
+      rows={5}
+      maxLength={10000000}
+      className="w-full p-3 rounded-xl bg-[var(--bg-input)] border-2 border-[var(--border)] text-[var(--text-primary)] text-sm font-mono resize-y focus:outline-none focus:border-[var(--accent)]"
+    />
+
+    <p className="text-xs text-[var(--text-muted)] mt-2 mb-3">
+      Uses the export formats selected above.
+      The level ID is optional for local imports.
+    </p>
+
+    <Button
+      onClick={importLevel}
+      loading={importing}
+      disabled={!importData.trim() || exportFormats.length === 0}
+      icon={<DownloadIcon className="w-4 h-4" />}
+      className="w-full"
+    >
+      Import & Export
+    </Button>
+
+    {importError && (
+      <div className="mt-3 p-3 rounded-xl bg-[var(--error)]/10 text-[var(--error)] text-sm">
+        {importError}
+      </div>
+    )}
+
+    {importSuccess && (
+      <div className="mt-3 p-3 rounded-xl bg-[var(--success)]/10 text-[var(--success)] text-sm">
+        {importSuccess}
+      </div>
+    )}
+
+    {importedFiles.length > 0 && (
+      <div className="mt-4 flex flex-wrap gap-2">
+        {importedFiles.map((file) => (
+          <Button
+            key={file.format}
+            variant="secondary"
+            size="sm"
+            onClick={() => downloadFile(file)}
+          >
+            {file.filename}
+          </Button>
+        ))}
+      </div>
+    )}
+  </CardContent>
+</Card>
+                    
                     {levelInfo && (
                       <Card key={levelInfo.id} className="animate-gd-slide-up stagger-2">
                         <CardHeader icon={<GamepadIcon className="w-5 h-5" />}>
